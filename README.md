@@ -24,40 +24,7 @@ from dotenv import load_dotenv; load_dotenv()
 
 ## Usage
 
-- Minimal example (same API as before):
-
-```
-from yf_history import CacheConfig, TimeSeriesCache, HistoryService
-
-cache = TimeSeriesCache(CacheConfig(root="~/market_cache"))
-hist = HistoryService(cache, provider="yfinance", naive_tz="America/New_York")
-
-# Single symbol
-bars = hist.get_history(
-    symbol="AAPL",
-    start="2024-09-01 09:30 America/New_York",
-    end="2024-09-03 16:00 America/New_York",
-    interval="1h",
-    policy="auto_extend",
-    align=True,
-    fill="ffill_zero_volume",
-)
-
-# Multiple symbols -> dict[str, DataFrame]
-multi = hist.get_history(["AAPL", "MSFT"], start="2024-09-01", end="2024-09-10", interval="1d")
-```
-
-- Drop-in for your existing notebooks/code:
-
-Replace the import from `tradingmini.reliable_cache` with `yf_history` and keep the rest intact:
-
-```
-from yf_history import CacheConfig, TimeSeriesCache, HistoryService
-
-cache = TimeSeriesCache(CacheConfig(root="~/market_cache"))
-hist_yf = HistoryService(cache, provider="yfinance", naive_tz="America/New_York")
-hist = hist_yf
-```
+refer to `examples` folder for use cases
 
 ## Notes
 - This package intentionally includes only the yfinance path; Polygon/Alpaca code and keys are not required here.
