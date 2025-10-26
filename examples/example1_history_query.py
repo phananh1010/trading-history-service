@@ -1,6 +1,7 @@
 from pathlib import Path
 import pandas as pd
 from yf_history import CacheConfig, TimeSeriesCache, HistoryService
+from scanner import daily_last_6m
 
 # --- One-time setup ---
 cache = TimeSeriesCache(CacheConfig(root=Path("./.yf_cache")))
@@ -60,3 +61,10 @@ bars_pd_tzaware = hist.get_history(
 print("naive_local:", bars_naive_local.index[:3])
 print("iso_offset :", bars_iso_offset.index[:3])
 print("pd_tzaware :", bars_pd_tzaware.index[:3])
+
+# =========================
+# 4) Convenience: last 6 months of daily OHLCV
+# =========================
+bars_daily_6m = daily_last_6m(hist, symbol)
+print(f"daily_last_6m: fetched {len(bars_daily_6m)} bars for {symbol}")
+print(bars_daily_6m.tail(10))
