@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal, cast
 import pandas as pd
+import numpy as np 
+
 
 from ._index_ops import align_many_on_grid
 
@@ -117,8 +119,10 @@ def _normalize_ohlcv_columns(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
 
     for c in want:
         if c not in df.columns:
-            df[c] = 0.0 if c != "volume" else 0
+            # Don't fabricate trades: keep volume as NaN if missing
+            df[c] = 0.0 if c != "volume" else np.nan
     return df[list(want)]
+
 
 
 def _fetch_yf(symbol: str, start: pd.Timestamp, end: pd.Timestamp, interval: Interval) -> pd.DataFrame:
@@ -346,16 +350,25 @@ class HistoryService:
                         continue
                     for c in ("open", "high", "low", "close"):
                         if c in df.columns:
-                            s = df[c]
-                            if not pd.api.types.is_numeric_dtype(s):
-                                s = pd.to_numeric(s, errors="coerce")
+                            s = pd.to_numeric(df[c], errors="coerce")
                             df[c] = s.ffill()
                     if "volume" in df.columns:
-                        s = df["volume"]
-                        if not pd.api.types.is_numeric_dtype(s):
-                            s = pd.to_numeric(s, errors="coerce")
+                        s = pd.to_numeric(df["volume"], errors="coerce")
                         df["volume"] = s.fillna(0)
                     out[k] = df
+    
+            elif fill and fill.lower() in ("ffill_prices_nan_volume", "prices_only"):
+                # Forward-fill prices but keep volume untouched (NaN on synthetic bars)
+                for k, df in out.items():
+                    if df is None or df.empty:
+                        continue
+                    for c in ("open", "high", "low", "close"):
+                        if c in df.columns:
+                            s = pd.to_numeric(df[c], errors="coerce")
+                            df[c] = s.ffill()
+                    # DO NOT touch 'volume'
+                    out[k] = df
+
 
         if isinstance(symbol, str):
             return out[syms[0]]

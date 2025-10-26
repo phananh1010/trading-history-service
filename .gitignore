@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_save
+*.ipynb_checkpoint
+
+# Conda / virtualenv
+.env
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+*.conda
+*.virtualenv
+
+# Logs
+*.log
+*.out
+*.err
+logs/
+log/
+debug/
+
+# Data
+data/
+*.csv
+*.tsv
+*.parquet
+*.h5
+*.zip
+*.tar
+*.gz
+*.png
+
+# Lean backtest & results
+*.json
+*.pkl
+*.pickle
+*.cache
+*.db
+*.sqlite
+results/
+backtests/
+cache/
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Notbooks
+notebooks/
+
+# Build / Dist
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+
+# Other temporary
+tmp/
+temp/
+WARMUP_SEQUENCE.md
+
+print_files.sh
+
+
