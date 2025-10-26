@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yf-history"
-version = "0.1.0"
+version = "0.2.1"
 description = "Lightweight yfinance-based history service with a local Parquet cache"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -27,6 +27,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["yf_history*"]
+include = ["yf_history*", "scanner*"]
 exclude = []
 
