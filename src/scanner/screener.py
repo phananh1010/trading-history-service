@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import time
 from typing import Callable, Iterable, Optional
+from typing import Union
+from datetime import date as _date
 from pathlib import Path
 
 import pandas as pd
@@ -72,12 +74,29 @@ class Scanner:
         )
 
     # --------------------- internal helpers (cache) ---------------------
-    def _trading_day_str(self) -> str:
-        """Use previous NY business day as the scoring 'as-of' date."""
-        now_ts = pd.Timestamp.now(self.tz)
-        today = now_ts.normalize()
-        yday = (today - pd.offsets.BDay(1)).normalize()
-        return yday.strftime("%Y-%m-%d")
+    def _normalize_asof(self, as_of: Union[str, pd.Timestamp, _date, None], *, tz: str) -> pd.Timestamp:
+        """
+        Returns a NY-local midnight timestamp for the requested as_of 'trading day'.
+        If as_of is None -> previous NY business day (existing behavior).
+        If as_of is a weekend/holiday, roll back to the previous business day.
+        """
+        if as_of is None:
+            now_ts = pd.Timestamp.now(tz)
+            return (now_ts.normalize() - pd.offsets.BDay(1))
+
+        t = pd.Timestamp(as_of)
+        if t.tz is None:
+            t = t.tz_localize(tz)
+        else:
+            t = t.tz_convert(tz)
+        # roll to previous business day if not a business day
+        if pd.tseries.offsets.BDay().is_on_offset(t.normalize()):
+            return t.normalize()
+        return (t.normalize() - pd.offsets.BDay(1))
+
+    def _trading_day_str(self, as_of_ts: pd.Timestamp) -> str:
+        """Format NY-local trading day as YYYY-MM-DD."""
+        return as_of_ts.date().isoformat()
 
     def _cache_dir_for_day(self, day_str: str) -> Path:
         d = self.cache_root / day_str
@@ -145,8 +164,16 @@ class Scanner:
         u_sorted = sorted(u, key=lambda d: float(d.get("marketCap", 0.0)), reverse=True)
         return [d["symbol"] for d in u_sorted[: int(k)]]
 
-    def score(self, symbols: list[str], *, atr_n: int = 14) -> pd.DataFrame:
-        day_str = self._trading_day_str()
+    def score(
+        self,
+        symbols: list[str],
+        *,
+        atr_n: int = 14,
+        as_of: Union[str, pd.Timestamp, _date, None] = None,
+    ) -> pd.DataFrame:
+        # resolve the trading day (NY) and cache key
+        as_of_ts_ny = self._normalize_asof(as_of, tz=self.tz)
+        day_str = self._trading_day_str(as_of_ts_ny)
 
         # --- normalize & filter symbols early ---
         def _normalize_yf_symbol(sym: str) -> str | None:
@@ -161,14 +188,15 @@ class Scanner:
         symbols = [_normalize_yf_symbol(s) for s in symbols]
         symbols = [s for s in symbols if s is not None]
 
-        # time window (6m back -> prev business day 16:00)
-        now_ts = pd.Timestamp.now(self.tz)
-        today = now_ts.normalize()
-        yday = pd.Timestamp(day_str, tz=self.tz)
-        start = (today - pd.DateOffset(months=self.lookback_months)).replace()
+        # time window (lookback_months -> as_of 16:00 NY)
+        end_ny_close = as_of_ts_ny.replace(hour=16, minute=0, second=0, microsecond=0)
+        start_ny = (as_of_ts_ny + pd.DateOffset(months=-self.lookback_months)).replace(
+            hour=9, minute=30, second=0, microsecond=0
+        )
 
-        def fmt(d, h=0, m=0):
-            return (d + pd.Timedelta(hours=h, minutes=m)).strftime("%Y-%m-%d %H:%M")
+        def fmt_local(ts: pd.Timestamp) -> str:
+            # naive strings interpreted in HistoryService.naive_tz
+            return ts.strftime("%Y-%m-%d %H:%M")
 
         # Pass 1: compute & cache only for missing symbols
         for sym in symbols:
@@ -181,8 +209,8 @@ class Scanner:
 
                 bars = self.history.get_history(
                     sym,
-                    start=fmt(start, 9, 30),
-                    end=fmt(yday, 16, 0),
+                    start=fmt_local(start_ny),
+                    end=fmt_local(end_ny_close),
                     interval="1d",
                     rth_only=self.rth_only,
                     align=self.align,
@@ -190,6 +218,13 @@ class Scanner:
                 )
                 if bars is None or bars.empty:
                     continue
+
+                # ensure we only use data up to (and including) as_of day
+                try:
+                    end_utc = end_ny_close.tz_convert("UTC")
+                except Exception:
+                    end_utc = end_ny_close.tz_localize(self.tz).tz_convert("UTC")
+                bars = bars.loc[:end_utc]
 
                 sw = swing_metrics(bars)
                 vol_mil = float(volume_score(bars))
@@ -241,19 +276,28 @@ class Scanner:
 
 
 # ---------------------- Back-compat convenience ----------------------
-def daily_last_6m(hist: HistoryService, symbol: str, tz: str = "America/New_York") -> pd.DataFrame:
-    now_ts = pd.Timestamp.now(tz)
-    today = now_ts.normalize()
-    yday = (today - pd.offsets.BDay(1)).normalize()
-    start = (today - pd.DateOffset(months=6)).replace()
+def daily_last_6m(
+    hist: HistoryService,
+    symbol: str,
+    tz: str = "America/New_York",
+    as_of: Union[str, pd.Timestamp, _date, None] = None,
+) -> pd.DataFrame:
+    tz = tz or "America/New_York"
+    if as_of is None:
+        yday = (pd.Timestamp.now(tz).normalize() - pd.offsets.BDay(1))
+    else:
+        t = pd.Timestamp(as_of)
+        t = t.tz_localize(tz) if t.tz is None else t.tz_convert(tz)
+        yday = t.normalize() if pd.tseries.offsets.BDay().is_on_offset(t.normalize()) else (t.normalize() - pd.offsets.BDay(1))
+    start = (yday + pd.DateOffset(months=-6)).replace(hour=9, minute=30)
 
     def fmt(d, h=0, m=0):
         return (d + pd.Timedelta(hours=h, minutes=m)).strftime("%Y-%m-%d %H:%M")
 
     return hist.get_history(
         symbol,
-        start=fmt(start, 9, 30),
-        end=fmt(yday, 16, 0),
+        start=fmt(start),
+        end=fmt(yday.replace(hour=16, minute=0)),
         interval="1d",
         rth_only=True,
         align=True,
