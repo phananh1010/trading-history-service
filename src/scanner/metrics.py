@@ -5,12 +5,30 @@ import pandas as pd
 
 def swing_metrics(d180: pd.DataFrame) -> dict[str, float]:
     s = d180['close']
-    r = np.log(s / s.shift(1)).dropna()
-    amp  = float(r.std() * 2)                          # rough 2σ amplitude
-    freq = float(np.sign(r).diff().ne(0).sum() / len(r))  # sign-flip rate
-    auto = float(-(r.autocorr(1) or 0))                # anti-trend bonus
-    score = float(amp * freq * (1 + auto))
-    return {"swing_score": score, "swing_amp": amp, "swing_freq": freq, "swing_auto": auto}
+    r = np.log(s / s.shift(1))
+    # Drop inf/NaN returns to avoid empty-length divide warnings
+    r = r.replace([np.inf, -np.inf], np.nan).dropna()
+
+    n = len(r)
+    amp = float((r.std() * 2) if n else 0.0)  # rough 2σ amplitude
+
+    if n:
+        flips = int(np.sign(r).diff().ne(0).sum())
+        freq = float(flips / n)  # sign-flip rate
+    else:
+        freq = 0.0
+
+    ac1 = r.autocorr(1) if n else 0.0
+    auto = float(-(ac1 if pd.notna(ac1) else 0.0))  # anti-trend bonus
+
+    # If amp or freq is NaN (e.g., too few samples), score becomes NaN
+    score = float(amp * freq * (1 + auto)) if (pd.notna(amp) and pd.notna(freq)) else float('nan')
+    return {
+        "swing_score": score,
+        "swing_amp": amp,
+        "swing_freq": freq,
+        "swing_auto": auto,
+    }
 
 def volume_score(d180: pd.DataFrame) -> float:
     return float(d180['volume'].sum() / 1e6)
@@ -47,10 +65,10 @@ class SupportMetrics:
         lows = df["low"]
         pivots = []
         for i in range(self.k, len(lows) - self.k):
-            if lows[i] == lows[i - self.k:i + self.k + 1].min():
+            if lows.iloc[i] == lows.iloc[i - self.k:i + self.k + 1].min():
                 future = df["close"].iloc[i + 1:i + 1 + self.confirm_n]
-                if (future > lows[i]).all():
-                    pivots.append((df.index[i], lows[i]))
+                if (future > lows.iloc[i]).all():
+                    pivots.append((df.index[i], lows.iloc[i]))
         if not pivots:
             return {"support_primary": np.nan, "support_secondary": np.nan, "dist_primary_atr": np.nan, "dist_secondary_atr": np.nan}
 
@@ -72,3 +90,21 @@ class SupportMetrics:
             "dist_primary_atr": float(primary["dist_atr"]),
             "dist_secondary_atr": float(secondary["dist_atr"]),
         }
+
+
+def spp_score(d180: pd.DataFrame) -> float:
+    """Return the primary support price from SupportMetrics.
+
+    Parameters
+    ----------
+    d180 : pd.DataFrame
+        Daily OHLCV DataFrame with columns including "high", "low", "close".
+
+    Returns
+    -------
+    float
+        The computed primary support level, or NaN if unavailable.
+    """
+    sm = SupportMetrics(d180)
+    res = sm.compute()
+    return res
