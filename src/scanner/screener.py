@@ -17,6 +17,7 @@ from datetime import date as _date
 from pathlib import Path
 
 import pandas as pd
+from tqdm import tqdm
 
 from yf_history.reliable_cache import HistoryService
 from .metrics import swing_metrics, volume_score, ar_score, atr_score, spp_score
@@ -199,7 +200,7 @@ class Scanner:
             return ts.strftime("%Y-%m-%d %H:%M")
 
         # Pass 1: compute & cache only for missing symbols
-        for sym in symbols:
+        for sym in tqdm(symbols):
             if self._load_cached_score(day_str, sym) is not None:
                 continue  # already cached for this day
 
