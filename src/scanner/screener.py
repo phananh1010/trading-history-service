@@ -264,7 +264,7 @@ class Scanner:
             return pd.DataFrame(columns=[
                 "swing_score","swing_amp","swing_freq","swing_auto",
                 "volume_mil","AR_score","ATR_score","support_primary",
-                "dist_supp_atr","n_bars"
+                "dist_supp_atr","n_bars","rank_atr","rank_dist","combo_rank"
             ])
 
         df = (
@@ -273,6 +273,24 @@ class Scanner:
               .sort_index()
               .drop(columns=["asof"], errors="ignore")
         )
+        # Filter out symbols at/near support: keep strictly > 0.01 ATR distance
+        try:
+            df = df[df["dist_supp_atr"] > 0.01].copy()
+        except Exception:
+            pass
+        # Derived cross-symbol rankings
+        try:
+            df["rank_atr"] = df["AR_score"].rank(ascending=False)
+        except Exception:
+            df["rank_atr"] = pd.NA
+        try:
+            df["rank_dist"] = df["dist_supp_atr"].rank(ascending=True)
+        except Exception:
+            df["rank_dist"] = pd.NA
+        # Average the two ranks when both are available
+        with pd.option_context('mode.use_inf_as_na', True):
+            df["combo_rank"] = (df[["rank_atr", "rank_dist"]].mean(axis=1))
+
         return df
 
 
