@@ -20,7 +20,13 @@ import pandas as pd
 from tqdm import tqdm
 
 from yf_history.reliable_cache import HistoryService
-from .metrics import swing_metrics, volume_score, ar_score, atr_score, spp_score
+from .indicators import (
+    swing as swing_metrics,
+    volume_millions as volume_score,
+    ar as ar_score,
+    atr as atr_score,
+    support,
+)
 from .universe import fetch_nasdaq_universe
 
 
@@ -231,7 +237,7 @@ class Scanner:
                 vol_mil = float(volume_score(bars))
                 ar = float(ar_score(bars))
                 atr = float(atr_score(bars, n=atr_n))
-                spp = spp_score(bars)  # compute once
+                spp = support(bars)  # compute once via indicators library
 
                 payload = {
                     "asof": day_str,
