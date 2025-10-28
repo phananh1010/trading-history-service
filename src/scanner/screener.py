@@ -24,6 +24,7 @@ from .indicators import (
     swing as swing_metrics,
     volume_millions as volume_score,
     ar as ar_score,
+    ar_cross as ar_cross_score,
     atr as atr_score,
     support,
 )
@@ -205,10 +206,19 @@ class Scanner:
             # naive strings interpreted in HistoryService.naive_tz
             return ts.strftime("%Y-%m-%d %H:%M")
 
-        # Pass 1: compute & cache only for missing symbols
+        # Pass 1: compute & cache only for missing or incomplete symbols
         for sym in tqdm(symbols):
-            if self._load_cached_score(day_str, sym) is not None:
-                continue  # already cached for this day
+            rec = self._load_cached_score(day_str, sym)
+            if rec is not None:
+                # Determine if the cached record is complete for today's schema
+                required_keys = {
+                    "swing_score", "swing_amp", "swing_freq", "swing_auto",
+                    "volume_mil", "AR_score", "ATR_score", "support_primary",
+                    "dist_supp_atr", "n_bars",
+                }
+                has_cross = ("AR_cross_score" in rec) or ("AR_cross" in rec)
+                if required_keys.issubset(rec.keys()) and has_cross:
+                    continue  # already cached & complete for this day
 
             try:
                 if self.request_pause_s:
@@ -236,6 +246,7 @@ class Scanner:
                 sw = swing_metrics(bars)
                 vol_mil = float(volume_score(bars))
                 ar = float(ar_score(bars))
+                arx = float(ar_cross_score(bars))
                 atr = float(atr_score(bars, n=atr_n))
                 spp = support(bars)  # compute once via indicators library
 
@@ -248,6 +259,8 @@ class Scanner:
                     "swing_auto": float(sw.get("swing_auto", 0.0)),
                     "volume_mil": vol_mil,
                     "AR_score": ar,
+                    # Use the canonical name 'AR_cross_score'
+                    "AR_cross_score": arx,
                     "ATR_score": atr,
                     "support_primary": float(spp.get("support_primary", float("nan"))),
                     "dist_supp_atr": float(spp.get("dist_primary_atr", float("nan"))),
@@ -264,12 +277,18 @@ class Scanner:
         for sym in symbols:
             rec = self._load_cached_score(day_str, sym)
             if rec is not None:
+                # Backward-compat: older cache files used key 'AR_cross'
+                if "AR_cross_score" not in rec and "AR_cross" in rec:
+                    try:
+                        rec["AR_cross_score"] = float(rec["AR_cross"])
+                    except Exception:
+                        rec["AR_cross_score"] = rec["AR_cross"]
                 rows.append(rec)
 
         if not rows:
             return pd.DataFrame(columns=[
                 "swing_score","swing_amp","swing_freq","swing_auto",
-                "volume_mil","AR_score","ATR_score","support_primary",
+                "volume_mil","AR_score","AR_cross_score","ATR_score","support_primary",
                 "dist_supp_atr","n_bars","rank_atr","rank_dist","combo_rank"
             ])
 
@@ -279,6 +298,15 @@ class Scanner:
               .sort_index()
               .drop(columns=["asof"], errors="ignore")
         )
+        # Normalize column naming for AR cross metric
+        if "AR_cross" in df.columns and "AR_cross_score" not in df.columns:
+            df = df.rename(columns={"AR_cross": "AR_cross_score"})
+        # If both exist (mixed caches), keep the canonical and drop the legacy alias
+        if "AR_cross" in df.columns and "AR_cross_score" in df.columns:
+            df = df.drop(columns=["AR_cross"])  # prefer canonical name
+        # Guarantee presence of the canonical column even if missing in caches
+        if "AR_cross_score" not in df.columns:
+            df["AR_cross_score"] = pd.NA
         # Filter out symbols at/near support: keep strictly > 0.01 ATR distance
         try:
             df = df[df["dist_supp_atr"] > 0.01].copy()

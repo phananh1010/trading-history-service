@@ -62,6 +62,12 @@ def ar(df: pd.DataFrame) -> float:
     """Average range proxy: mean((high - low) / low)."""
     return float(((df['high'] - df['low']) / df['low']).mean())
 
+def ar_cross(df: pd.DataFrame) -> float:
+    """Inter-day range proxy: mean((high_t - low_{t-1}) / low_{t-1})."""
+    low_prev = df['low'].shift(2)
+    ratio = (df['high'] - low_prev) / low_prev
+    return float(ratio.dropna().mean())
+
 
 def atr(df: pd.DataFrame, n: int = 14) -> float:
     """Average True Range using EWMA with alpha=1/n."""
@@ -150,4 +156,3 @@ def spp_primary(df: pd.DataFrame, *, atr_n: int = 14, k: int = 2, confirm_n: int
     """
     res = support(df, atr_n=atr_n, k=k, confirm_n=confirm_n)
     return float(res.get("support_primary", np.nan))
-

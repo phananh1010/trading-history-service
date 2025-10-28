@@ -3,7 +3,7 @@ import pandas as pd
 
 from yf_history import CacheConfig, TimeSeriesCache, HistoryService
 from scanner import daily_last_6m
-from scanner.indicators import atr, ar, swing, support, volume_millions
+from scanner.indicators import atr, ar, ar_cross, swing, support, volume_millions
 
 # --- setup ---
 cache = TimeSeriesCache(CacheConfig(root=Path("./.yf_cache")))
@@ -21,6 +21,7 @@ daily = {
     **swing(daily_bars),
     "volume_mil": volume_millions(daily_bars),
     "AR_score": ar(daily_bars),
+    "AR_cross": ar_cross(daily_bars),
     "ATR_score": atr(daily_bars, n=14),
     **support(daily_bars, atr_n=14),
 }
@@ -54,6 +55,7 @@ intraday = {
     **swing(intraday_bars),
     "volume_mil": volume_millions(intraday_bars),
     "AR_score": ar(intraday_bars),
+    "AR_cross": ar_cross(intraday_bars),
     "ATR_score": atr(intraday_bars, n=14),
     **support(intraday_bars, atr_n=14),
 }
