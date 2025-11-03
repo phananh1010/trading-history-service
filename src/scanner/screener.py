@@ -27,6 +27,8 @@ from .indicators import (
     ar_cross as ar_cross_score,
     atr as atr_score,
     support,
+    uptrend_score,
+    d_sma200,
 )
 from .universe import fetch_nasdaq_universe
 
@@ -215,6 +217,8 @@ class Scanner:
                     "swing_score", "swing_amp", "swing_freq", "swing_auto",
                     "volume_mil", "AR_score", "ATR_score", "support_primary",
                     "dist_supp_atr", "n_bars",
+                    "uptrend_score",
+                    "d_sma200",
                 }
                 has_cross = ("AR_cross_score" in rec) or ("AR_cross" in rec)
                 if required_keys.issubset(rec.keys()) and has_cross:
@@ -249,6 +253,8 @@ class Scanner:
                 arx = float(ar_cross_score(bars))
                 atr = float(atr_score(bars, n=atr_n))
                 spp = support(bars)  # compute once via indicators library
+                ups = uptrend_score(bars)
+                dsma = float(d_sma200(bars))
 
                 payload = {
                     "asof": day_str,
@@ -264,6 +270,8 @@ class Scanner:
                     "ATR_score": atr,
                     "support_primary": float(spp.get("support_primary", float("nan"))),
                     "dist_supp_atr": float(spp.get("dist_primary_atr", float("nan"))),
+                    "uptrend_score": float(ups),
+                    "d_sma200": dsma,
                     "n_bars": int(len(bars)),
                 }
                 self._save_cached_score(day_str, payload)
@@ -289,7 +297,7 @@ class Scanner:
             return pd.DataFrame(columns=[
                 "swing_score","swing_amp","swing_freq","swing_auto",
                 "volume_mil","AR_score","AR_cross_score","ATR_score","support_primary",
-                "dist_supp_atr","n_bars","rank_atr","rank_dist","combo_rank"
+                "dist_supp_atr","n_bars","uptrend_score","d_sma200","rank_atr","rank_dist","combo_rank"
             ])
 
         df = (
@@ -358,6 +366,47 @@ def daily_last_6m(
     )
 
 
+def intraday_last_n_days(
+    hist: HistoryService,
+    symbol: str,
+    n_days: int,
+    *,
+    interval: str = "60m",
+    tz: str = "America/New_York",
+    as_of: Union[str, pd.Timestamp, _date, None] = None,
+) -> pd.DataFrame:
+    """Fetch intraday OHLCV for the last N business days up to as_of.
+
+    - interval: one of ("1m","5m","15m","30m","60m","1h")
+    - rth_only, align, and fill are set for typical charting use.
+    """
+    tz = tz or "America/New_York"
+
+    if as_of is None:
+        as_of_ts = (pd.Timestamp.now(tz).normalize())
+        if not pd.tseries.offsets.BDay().is_on_offset(as_of_ts):
+            as_of_ts = as_of_ts - pd.offsets.BDay(1)
+    else:
+        t = pd.Timestamp(as_of)
+        t = t.tz_localize(tz) if t.tz is None else t.tz_convert(tz)
+        as_of_ts = t.normalize() if pd.tseries.offsets.BDay().is_on_offset(t.normalize()) else (t.normalize() - pd.offsets.BDay(1))
+
+    start = (as_of_ts - pd.offsets.BDay(int(n_days))).replace(hour=9, minute=30)
+    end = as_of_ts.replace(hour=16, minute=0)
+
+    def fmt(d, h=0, m=0):
+        return (d + pd.Timedelta(hours=h, minutes=m)).strftime("%Y-%m-%d %H:%M")
+
+    return hist.get_history(
+        symbol=symbol,
+        start=fmt(start),
+        end=fmt(end),
+        interval=interval,
+        policy="auto_extend",
+        rth_only=True,
+        align=True,
+        fill="ffill_zero_volume",
+    )
 def screen(hist: HistoryService, symbols: Iterable[str], *, atr_n: int = 14) -> pd.DataFrame:
     """Return a tidy DataFrame with one row per symbol and metric columns.
 

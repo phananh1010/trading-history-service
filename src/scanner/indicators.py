@@ -156,3 +156,54 @@ def spp_primary(df: pd.DataFrame, *, atr_n: int = 14, k: int = 2, confirm_n: int
     """
     res = support(df, atr_n=atr_n, k=k, confirm_n=confirm_n)
     return float(res.get("support_primary", np.nan))
+
+
+def uptrend_score(df: pd.DataFrame) -> float:
+    """Composite year-long uptrend score: slope + persistence − drawdown.
+    Returns a dimensionless score; higher = stronger/steadier uptrend.
+    """
+    if df is None or df.empty or "close" not in df.columns:
+        return float("nan")
+    s = pd.to_numeric(df["close"], errors="coerce").dropna()
+    n = len(s)
+    if n < 30:
+        return float("nan")
+
+    x = np.arange(n, dtype=float)
+    slope = np.polyfit(x, s.values, 1)[0]                  # price per bar
+    slope_norm = float(slope / (s.mean() if s.mean() else 1.0))
+
+    r = s.pct_change().dropna()
+    win_ratio = float((r > 0).mean())                      # 0..1
+
+    roll_max = s.cummax()
+    dd = (s - roll_max) / roll_max
+    max_dd = float(dd.min()) if len(dd) else 0.0           # negative
+
+    # weights: drift (0.4) + persistence (0.3) + stability (0.3)
+    #return float(0.4 * slope_norm + 0.3 * (win_ratio - 0.5) + 0.3 * (1.0 + max_dd))
+
+    return float(0.1 * slope_norm + 0.8 * (win_ratio - 0.5) + 0.1 * (1.0 + max_dd))
+
+
+def d_sma200(df: pd.DataFrame) -> float:
+    """Signed distance of last close to SMA(200): (close - SMA200) / SMA200.
+
+    Uses window=min(200, n). Requires at least 20 closes to avoid noisy outputs.
+    Returns NaN if insufficient data or SMA is zero/NaN.
+    """
+    if df is None or df.empty or "close" not in df.columns:
+        return float("nan")
+
+    s = pd.to_numeric(df["close"], errors="coerce").dropna()
+    n = len(s)
+    if n < 20:
+        return float("nan")
+
+    w = min(200, n)
+    sma = s.rolling(window=w, min_periods=20).mean().iloc[-1]
+    if not np.isfinite(sma) or sma == 0:
+        return float("nan")
+
+    c = float(s.iloc[-1])
+    return float((c - sma) / sma)
