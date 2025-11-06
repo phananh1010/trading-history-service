@@ -38,6 +38,7 @@ if not pd.tseries.offsets.BDay().is_on_offset(as_of):
     as_of = as_of - pd.offsets.BDay(1)
 start = (as_of - pd.offsets.BDay(5)).replace(hour=9, minute=30)
 end = as_of.replace(hour=16, minute=0)
+end = as_of.replace(hour=16, minute=0)
 
 intraday_bars = hist.get_history(
     symbol=symbol,
