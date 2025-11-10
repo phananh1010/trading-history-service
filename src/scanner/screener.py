@@ -255,15 +255,39 @@ class Scanner:
                     end_utc = end_ny_close.tz_localize(self.tz).tz_convert("UTC")
                 bars = bars.loc[:end_utc]
 
-                sw = swing_metrics(bars)
-                vol_mil = float(volume_score(bars))
-                ar = float(ar_score(bars))
-                arx = float(ar_cross_score(bars))
-                atr = float(atr_score(bars, n=atr_n))
-                spp = support(bars)  # compute once via indicators library
-                ups = uptrend_score(bars)
-                dsma = float(d_sma200(bars))
-                sm_mse, sm_slope = smooth_score(bars)
+                # Use only real trading sessions for scoring (exclude synthetic aligned rows)
+                bars_eff = bars
+                try:
+                    if "volume" in bars.columns:
+                        vol = pd.to_numeric(bars["volume"], errors="coerce").fillna(0)
+                        m = vol > 0
+                        if m.any():
+                            bars_eff = bars.loc[m]
+                        else:
+                            # Fallback: trim from first valid close onward
+                            first_valid = pd.to_numeric(bars["close"], errors="coerce").first_valid_index()
+                            if first_valid is not None:
+                                bars_eff = bars.loc[first_valid:]
+                    else:
+                        # No volume column: trim from first valid close onward
+                        first_valid = pd.to_numeric(bars["close"], errors="coerce").first_valid_index()
+                        if first_valid is not None:
+                            bars_eff = bars.loc[first_valid:]
+                except Exception:
+                    pass
+
+                if bars_eff is None or bars_eff.empty:
+                    continue
+
+                sw = swing_metrics(bars_eff)
+                vol_mil = float(volume_score(bars_eff))
+                ar = float(ar_score(bars_eff))
+                arx = float(ar_cross_score(bars_eff))
+                atr = float(atr_score(bars_eff, n=atr_n))
+                spp = support(bars_eff)  # compute once via indicators library
+                ups = uptrend_score(bars_eff)
+                dsma = float(d_sma200(bars_eff))
+                sm_mse, sm_slope = smooth_score(bars_eff)
 
                 payload = {
                     "asof": day_str,
@@ -283,7 +307,8 @@ class Scanner:
                     "d_sma200": dsma,
                     "smooth_MSE": float(sm_mse),
                     "smooth_slope": float(sm_slope),
-                    "n_bars": int(len(bars)),
+                    # Count only effective (real) bars
+                    "n_bars": int(len(bars_eff)),
                 }
                 self._save_cached_score(day_str, payload)
 
@@ -415,15 +440,37 @@ class Scanner:
                     end_utc = end_ny_close.tz_localize(self.tz).tz_convert("UTC")
                 bars = bars.loc[:end_utc]
 
-                sw = swing_metrics(bars)
-                vol_mil = float(volume_score(bars))
-                ar = float(ar_score(bars))
-                arx = float(ar_cross_score(bars))
-                atr = float(atr_score(bars, n=atr_n))
-                spp = support(bars)
-                ups = uptrend_score(bars)
-                dsma = float(d_sma200(bars))
-                sm_mse, sm_slope = smooth_score(bars)
+                # Use only real trading sessions for scoring (exclude synthetic aligned rows)
+                bars_eff = bars
+                try:
+                    if "volume" in bars.columns:
+                        vol = pd.to_numeric(bars["volume"], errors="coerce").fillna(0)
+                        m = vol > 0
+                        if m.any():
+                            bars_eff = bars.loc[m]
+                        else:
+                            first_valid = pd.to_numeric(bars["close"], errors="coerce").first_valid_index()
+                            if first_valid is not None:
+                                bars_eff = bars.loc[first_valid:]
+                    else:
+                        first_valid = pd.to_numeric(bars["close"], errors="coerce").first_valid_index()
+                        if first_valid is not None:
+                            bars_eff = bars.loc[first_valid:]
+                except Exception:
+                    pass
+
+                if bars_eff is None or bars_eff.empty:
+                    continue
+
+                sw = swing_metrics(bars_eff)
+                vol_mil = float(volume_score(bars_eff))
+                ar = float(ar_score(bars_eff))
+                arx = float(ar_cross_score(bars_eff))
+                atr = float(atr_score(bars_eff, n=atr_n))
+                spp = support(bars_eff)
+                ups = uptrend_score(bars_eff)
+                dsma = float(d_sma200(bars_eff))
+                sm_mse, sm_slope = smooth_score(bars_eff)
 
                 payload = {
                     "asof": day_str,
@@ -442,7 +489,7 @@ class Scanner:
                     "d_sma200": dsma,
                     "smooth_MSE": float(sm_mse),
                     "smooth_slope": float(sm_slope),
-                    "n_bars": int(len(bars)),
+                    "n_bars": int(len(bars_eff)),
                 }
                 self._save_cached_score(day_str, payload)
 
