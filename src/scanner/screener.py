@@ -29,6 +29,7 @@ from .indicators import (
     support,
     uptrend_score,
     d_sma200,
+    smooth_score,
 )
 from .universe import fetch_nasdaq_universe
 
@@ -45,6 +46,12 @@ class Scanner:
     3) score(symbols: list[str]) -> pd.DataFrame
        Computes swing/volume/AR/ATR/support metrics and caches per-symbol results
        at ~/.cache/stock_universe/YYYY-MM-DD/SYMBOL.json (NY prev business day).
+
+    4) score_refresh(symbols: list[str]) -> pd.DataFrame
+       Recompute metrics for all requested symbols ignoring existing per-day
+       score cache files, but WITHOUT fetching fresh price history. Uses only
+       the history already present in the underlying HistoryService cache
+       (policy="respect_cache").
 
     Notes
     -----
@@ -219,6 +226,7 @@ class Scanner:
                     "dist_supp_atr", "n_bars",
                     "uptrend_score",
                     "d_sma200",
+                    "smooth_MSE", "smooth_slope",
                 }
                 has_cross = ("AR_cross_score" in rec) or ("AR_cross" in rec)
                 if required_keys.issubset(rec.keys()) and has_cross:
@@ -255,6 +263,7 @@ class Scanner:
                 spp = support(bars)  # compute once via indicators library
                 ups = uptrend_score(bars)
                 dsma = float(d_sma200(bars))
+                sm_mse, sm_slope = smooth_score(bars)
 
                 payload = {
                     "asof": day_str,
@@ -272,6 +281,8 @@ class Scanner:
                     "dist_supp_atr": float(spp.get("dist_primary_atr", float("nan"))),
                     "uptrend_score": float(ups),
                     "d_sma200": dsma,
+                    "smooth_MSE": float(sm_mse),
+                    "smooth_slope": float(sm_slope),
                     "n_bars": int(len(bars)),
                 }
                 self._save_cached_score(day_str, payload)
@@ -297,7 +308,7 @@ class Scanner:
             return pd.DataFrame(columns=[
                 "swing_score","swing_amp","swing_freq","swing_auto",
                 "volume_mil","AR_score","AR_cross_score","ATR_score","support_primary",
-                "dist_supp_atr","n_bars","uptrend_score","d_sma200","rank_atr","rank_dist","combo_rank"
+                "dist_supp_atr","n_bars","uptrend_score","d_sma200","smooth_MSE","smooth_slope","rank_atr","rank_dist","combo_rank"
             ])
 
         df = (
@@ -306,6 +317,9 @@ class Scanner:
               .sort_index()
               .drop(columns=["asof"], errors="ignore")
         )
+        # Drop legacy smooth_score if present (replaced by smooth_MSE/smooth_slope)
+        if "smooth_score" in df.columns:
+            df = df.drop(columns=["smooth_score"], errors="ignore")
         # Normalize column naming for AR cross metric
         if "AR_cross" in df.columns and "AR_cross_score" not in df.columns:
             df = df.rename(columns={"AR_cross": "AR_cross_score"})
@@ -330,6 +344,158 @@ class Scanner:
         except Exception:
             df["rank_dist"] = pd.NA
         # Average the two ranks when both are available
+        with pd.option_context('mode.use_inf_as_na', True):
+            df["combo_rank"] = (df[["rank_atr", "rank_dist"]].mean(axis=1))
+
+        return df
+
+    def score_refresh(
+        self,
+        symbols: list[str],
+        *,
+        atr_n: int = 14,
+        as_of: Union[str, pd.Timestamp, _date, None] = None,
+    ) -> pd.DataFrame:
+        """Recompute metrics for symbols, ignoring per-day score cache, and
+        do NOT fetch fresh bars. Uses only cached OHLCV (policy='respect_cache').
+
+        If the requested time window is not fully covered by cached history for
+        a symbol, that symbol is skipped and the miss is recorded in self._errors.
+        """
+        # resolve the trading day (NY) and cache key
+        as_of_ts_ny = self._normalize_asof(as_of, tz=self.tz)
+        day_str = self._trading_day_str(as_of_ts_ny)
+
+        # --- normalize & filter symbols early ---
+        def _normalize_yf_symbol(sym: str) -> str | None:
+            if not sym or not isinstance(sym, str):
+                return None
+            s = sym.strip().upper()
+            s = s.replace("/", "-").replace(".", "-")
+            if len(s) == 0 or any(ch in s for ch in ["?", " "]):
+                return None
+            return s
+
+        symbols = [_normalize_yf_symbol(s) for s in symbols]
+        symbols = [s for s in symbols if s is not None]
+
+        # time window (lookback_months -> as_of 16:00 NY)
+        end_ny_close = as_of_ts_ny.replace(hour=16, minute=0, second=0, microsecond=0)
+        start_ny = (as_of_ts_ny + pd.DateOffset(months=-self.lookback_months)).replace(
+            hour=9, minute=30, second=0, microsecond=0
+        )
+
+        def fmt_local(ts: pd.Timestamp) -> str:
+            # naive strings interpreted in HistoryService.naive_tz
+            return ts.strftime("%Y-%m-%d %H:%M")
+
+        # Pass 1: compute & overwrite cache for ALL provided symbols
+        for sym in tqdm(symbols):
+            try:
+                if self.request_pause_s:
+                    time.sleep(self.request_pause_s)
+
+                bars = self.history.get_history(
+                    sym,
+                    start=fmt_local(start_ny),
+                    end=fmt_local(end_ny_close),
+                    interval="1d",
+                    policy="respect_cache",  # DO NOT fetch fresh bars
+                    rth_only=self.rth_only,
+                    align=self.align,
+                    fill=self.fill,
+                )
+                if bars is None or bars.empty:
+                    continue
+
+                # ensure we only use data up to (and including) as_of day
+                try:
+                    end_utc = end_ny_close.tz_convert("UTC")
+                except Exception:
+                    end_utc = end_ny_close.tz_localize(self.tz).tz_convert("UTC")
+                bars = bars.loc[:end_utc]
+
+                sw = swing_metrics(bars)
+                vol_mil = float(volume_score(bars))
+                ar = float(ar_score(bars))
+                arx = float(ar_cross_score(bars))
+                atr = float(atr_score(bars, n=atr_n))
+                spp = support(bars)
+                ups = uptrend_score(bars)
+                dsma = float(d_sma200(bars))
+                sm_mse, sm_slope = smooth_score(bars)
+
+                payload = {
+                    "asof": day_str,
+                    "symbol": sym,
+                    "swing_score": float(sw.get("swing_score", 0.0)),
+                    "swing_amp": float(sw.get("swing_amp", 0.0)),
+                    "swing_freq": float(sw.get("swing_freq", 0.0)),
+                    "swing_auto": float(sw.get("swing_auto", 0.0)),
+                    "volume_mil": vol_mil,
+                    "AR_score": ar,
+                    "AR_cross_score": arx,
+                    "ATR_score": atr,
+                    "support_primary": float(spp.get("support_primary", float("nan"))),
+                    "dist_supp_atr": float(spp.get("dist_primary_atr", float("nan"))),
+                    "uptrend_score": float(ups),
+                    "d_sma200": dsma,
+                    "smooth_MSE": float(sm_mse),
+                    "smooth_slope": float(sm_slope),
+                    "n_bars": int(len(bars)),
+                }
+                self._save_cached_score(day_str, payload)
+
+            except Exception as e:
+                self._errors.append((sym, str(e)))
+                continue
+
+        # Pass 2: load all requested symbols from cache and assemble DataFrame
+        rows: list[dict] = []
+        for sym in symbols:
+            rec = self._load_cached_score(day_str, sym)
+            if rec is not None:
+                if "AR_cross_score" not in rec and "AR_cross" in rec:
+                    try:
+                        rec["AR_cross_score"] = float(rec["AR_cross"])
+                    except Exception:
+                        rec["AR_cross_score"] = rec["AR_cross"]
+                rows.append(rec)
+
+        if not rows:
+            return pd.DataFrame(columns=[
+                "swing_score","swing_amp","swing_freq","swing_auto",
+                "volume_mil","AR_score","AR_cross_score","ATR_score","support_primary",
+                "dist_supp_atr","n_bars","uptrend_score","d_sma200","smooth_MSE","smooth_slope","rank_atr","rank_dist","combo_rank"
+            ])
+
+        df = (
+            pd.DataFrame(rows)
+              .set_index("symbol")
+              .sort_index()
+              .drop(columns=["asof"], errors="ignore")
+        )
+        # Drop legacy smooth_score if present (replaced by smooth_MSE/smooth_slope)
+        if "smooth_score" in df.columns:
+            df = df.drop(columns=["smooth_score"], errors="ignore")
+        if "AR_cross" in df.columns and "AR_cross_score" not in df.columns:
+            df = df.rename(columns={"AR_cross": "AR_cross_score"})
+        if "AR_cross" in df.columns and "AR_cross_score" in df.columns:
+            df = df.drop(columns=["AR_cross"])  # prefer canonical name
+        if "AR_cross_score" not in df.columns:
+            df["AR_cross_score"] = pd.NA
+        try:
+            df = df[df["dist_supp_atr"] > 0.01].copy()
+        except Exception:
+            pass
+        try:
+            df["rank_atr"] = df["AR_score"].rank(ascending=False)
+        except Exception:
+            df["rank_atr"] = pd.NA
+        try:
+            df["rank_dist"] = df["dist_supp_atr"].rank(ascending=True)
+        except Exception:
+            df["rank_dist"] = pd.NA
         with pd.option_context('mode.use_inf_as_na', True):
             df["combo_rank"] = (df[["rank_atr", "rank_dist"]].mean(axis=1))
 

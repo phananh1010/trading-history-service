@@ -185,6 +185,44 @@ def uptrend_score(df: pd.DataFrame) -> float:
 
     return float(0.1 * slope_norm + 0.8 * (win_ratio - 0.5) + 0.1 * (1.0 + max_dd))
 
+import numpy as np
+import pandas as pd
+
+def smooth_score(df: pd.DataFrame, col: str = "close") -> tuple[float, float]:
+    """
+    Fit a linear model to price normalized to base 1000 and return:
+    (MSE, slope_per_bar).
+
+    - Normalization: y_norm = price / price[0] * 1000.
+    - Linear fit: least squares on x = [0..n-1].
+    - MSE: mean squared error of residuals wrt the fit line, in normalized units.
+    - slope_per_bar: fitted slope (delta per bar) on the normalized scale.
+    """
+    if df is None or df.empty or col not in df.columns:
+        return float("nan"), float("nan")
+
+    s = pd.to_numeric(df[col], errors="coerce").dropna()
+    n = len(s)
+    if n < 2:
+        return float("nan"), float("nan")
+
+    y = s.values.astype(float)
+    y0 = y[0]
+    if not np.isfinite(y0) or y0 == 0.0:
+        return float("nan"), float("nan")
+
+    # Normalize to base 1000
+    y_norm = y * (1000.0 / y0)
+    x = np.arange(n, dtype=float)
+
+    # Linear regression (degree 1 polyfit)
+    slope, intercept = np.polyfit(x, y_norm, 1)
+    y_hat = slope * x + intercept
+    resid = y_norm - y_hat
+    mse = float(np.mean(resid ** 2))
+
+    return mse, float(slope)
+
 
 def d_sma200(df: pd.DataFrame) -> float:
     """Signed distance of last close to SMA(200): (close - SMA200) / SMA200.
